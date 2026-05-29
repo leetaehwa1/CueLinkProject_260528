@@ -2,24 +2,31 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const db = require("./config/db"); // 설계한 DB 설정 모듈 로드
+const passport = require('passport'); // 1. 임포트!
+require('./config/passport');
+
 require('dotenv').config();
+
 
 const app = express();
 
 // 글로벌 미들웨어 설정 (Spring의 Security 및 WebMvcConfigurer 역할)
 app.use(cors());
 app.use(express.json());
+app.use(passport.initialize())
 
 // 뷰 엔진 및 정적 파일 경로 설정
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views')); 
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
-// -------------------------------------------------------------
-// [★수정 분할 라인★] API 명세서의 Base URL인 /api를 프리픽스로 적용합니다.
-// -------------------------------------------------------------
-const authRouter = require("./routes/auth"); // 다음 단계에서 만들 회원가입/로그인 라우터
-app.use("/api/auth", authRouter);            // http://localhost:4000/api/auth 경로 매핑
+
+// 회원가입 및 로그인
+const authRouter = require("./routes/auth");
+app.use("/api/auth", authRouter);
+// 게시글
+const postsRouter = require("./routes/posts");
+app.use('/api/posts', postsRouter);
 
 // [MVP 관리]: 나머지 기능 개발 시 주석을 하나씩 해제합니다.
 // app.use("/api/users", require("./routes/user"));
