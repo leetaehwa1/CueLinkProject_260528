@@ -3,7 +3,8 @@ import MainPage from './pages/MainPage';
 import LoginPage from './pages/LoginPage';
 import AuthCallback from './pages/AuthCallback';
 import Header from './components/Header';
-import PostDetail from './pages/PostDetail';
+import EditPost from './pages/EditPost';
+import WritePage from './pages/WritePage';
 
 function App() {
   
@@ -14,7 +15,8 @@ function App() {
         <Route path="/" element={<MainPage />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/auth/callback" element={<AuthCallback />} />
-        <Route path="/posts/:id" element={<PostDetail />} />
+        <Route path="/posts/:postId/edit" element={<EditPost />} />
+        <Route path="/write" element={<WritePage />} />
       </Routes>
     </BrowserRouter>
   );

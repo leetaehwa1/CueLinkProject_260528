@@ -44,11 +44,20 @@ function LoginPage() {
   const handleLogin = async () => {
     try {
       const response = await api.post('/auth/login', { email: authForm.userId, password: authForm.password });
+      
       if (response.data.success) {
-        localStorage.setItem('token', response.data.data.accessToken);
+        const { accessToken, user } = response.data.data; // 서버의 responseData 구조에 맞춤
+        
+        localStorage.setItem('token', accessToken);
+        localStorage.setItem('userId', user.userId); // [수정] user 객체 안의 userId
+        
+        console.log("저장된 userId:", user.userId); // 확인용
         navigate('/');
       }
-    } catch (e) { alert('로그인 실패'); }
+    } catch (e) { 
+      console.error(e);
+      alert('로그인 실패'); 
+    }
   };
 
   return (

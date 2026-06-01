@@ -14,11 +14,17 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(passport.initialize())
+app.use(express.urlencoded({ extended: true }));
 
 // 뷰 엔진 및 정적 파일 경로 설정
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views')); 
-app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+
+
+// 2. 만약 파일이 server/uploads/editor에 있다면 이 설정이 필요합니다.
+app.use('/uploads/editor', express.static(path.join(__dirname, 'uploads/editor')));
+// profiles 폴더 연결
+app.use('/uploads/profiles', express.static(path.join(__dirname, 'src/uploads/profiles')));
 
 
 // 회원가입 및 로그인
