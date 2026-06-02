@@ -31,15 +31,8 @@ router.get('/categories', async (req, res) => {
   }
 });
 
-/**
- * @route   GET /api/posts
- * @desc    메인 SNS 피드 목록 조회 (이미지 포함)
- */
 router.get('/', async (req, res) => {
-  const keyword = req.query.keyword || '';
-  const categoryId = req.query.categoryId;
-  const page = parseInt(req.query.page, 10) || 1;
-  const limit = parseInt(req.query.limit, 10) || 10;
+  const { keyword = '', categoryId, page = 1, limit = 10, userId: currentUserId } = req.query; // currentUserId 추가
   const offset = (page - 1) * limit;
 
   let connection;
@@ -52,7 +45,9 @@ router.get('/', async (req, res) => {
              p.CATEGORY_ID as "categoryId", c.NAME as "categoryName", p.TITLE as "title",
              TO_CHAR(p.CONTENT) as "content", p.VIEW_COUNT as "viewCount",
              TO_CHAR(p.CREATED_AT, 'YYYY-MM-DD HH24:MI:SS') as "createdAt",
-             i.IMAGE_URL as "imageUrl" 
+             i.IMAGE_URL as "imageUrl",
+             (SELECT COUNT(*) FROM CL_POST_LIKES WHERE POST_ID = p.POST_ID) as "likeCount",
+             (SELECT COUNT(*) FROM CL_POST_LIKES WHERE POST_ID = p.POST_ID AND USER_ID = :currentUserId) as "isLiked"
       FROM CL_POSTS p
       JOIN CL_USERS u ON p.USER_ID = u.USER_ID
       JOIN CL_CATEGORIES c ON p.CATEGORY_ID = c.CATEGORY_ID
@@ -60,7 +55,12 @@ router.get('/', async (req, res) => {
       WHERE p.DELETED_AT IS NULL
     `;
     
-    const bindParams = { offset, limit };
+    const bindParams = { 
+      offset: parseInt(offset), 
+      limit: parseInt(limit),
+      currentUserId: parseInt(currentUserId || 0) // 로그인 안 했으면 0 처리
+    };
+
     if (categoryId) {
       sql += ` AND p.CATEGORY_ID = :categoryId`;
       bindParams.categoryId = parseInt(categoryId, 10);
@@ -74,6 +74,7 @@ router.get('/', async (req, res) => {
     const result = await connection.execute(sql, bindParams);
     return sendSuccess(res, '피드 목록을 가져왔습니다.', { posts: result.rows }, 200);
   } catch (err) {
+    console.error(err); // 에러 확인용
     return sendError(res, '서버 에러', 'INTERNAL_SERVER_ERROR', 500);
   } finally {
     if (connection) await connection.close();
@@ -274,5 +275,174 @@ router.post('/:postId/view', async (req, res) => {
   }
 });
 
+/**
+ * @route   POST /api/posts/:postId/like
+ * @desc    좋아요 토글
+ */
+router.post('/:postId/like', protect, async (req, res) => {
+  const { postId } = req.params;
+  const userId = req.user.userId;
+  let connection;
+
+  try {
+    connection = await db.getPool().getConnection();
+
+    // 1. 좋아요 여부 확인
+    const checkSql = `SELECT LIKE_ID FROM CL_POST_LIKES WHERE POST_ID = :postId AND USER_ID = :userId`;
+    const checkResult = await connection.execute(checkSql, { postId, userId });
+
+    let isLiked; // 좋아요 상태를 저장할 변수
+
+    if (checkResult.rows.length > 0) {
+      // 이미 있으면 삭제 (좋아요 취소)
+      await connection.execute(
+        `DELETE FROM CL_POST_LIKES WHERE POST_ID = :postId AND USER_ID = :userId`,
+        { postId, userId }
+      );
+      isLiked = false; // 취소했으니 false
+    } else {
+      // 없으면 추가 (좋아요)
+      await connection.execute(
+        `INSERT INTO CL_POST_LIKES (LIKE_ID, POST_ID, USER_ID) VALUES (SEQ_CL_POST_LIKES.NEXTVAL, :postId, :userId)`,
+        { postId, userId }
+      );
+      isLiked = true; // 추가했으니 true
+    }
+
+    await connection.commit();
+    
+    // 이제 에러 없이 상태값을 반환합니다
+    res.status(200).json({ liked: isLiked }); 
+  } catch (err) {
+    if (connection) await connection.rollback();
+    console.error("좋아요 DB 에러 상세:", err);
+    res.status(500).json({ error: "좋아요 처리 실패" });
+  } finally {
+    if (connection) await connection.close();
+  }
+});
+
+// 게시글 좋아요 상태 및 개수 조회 (GET)
+router.get('/:postId/likes', async (req, res) => {
+  const { postId } = req.params;
+  const userId = req.user?.userId; // 로그인 안 했을 수도 있음
+  let connection;
+  try {
+    connection = await db.getPool().getConnection();
+    
+    // 1. 전체 개수
+    const countSql = `SELECT COUNT(*) as cnt FROM CL_POST_LIKES WHERE POST_ID = :postId`;
+    const countResult = await connection.execute(countSql, { postId });
+    
+    // 2. 내가 좋아요를 눌렀는지 여부
+    let isLiked = false;
+    if (userId) {
+      const checkSql = `SELECT 1 FROM CL_POST_LIKES WHERE POST_ID = :postId AND USER_ID = :userId`;
+      const checkResult = await connection.execute(checkSql, { postId, userId });
+      isLiked = checkResult.rows.length > 0;
+    }
+
+    res.status(200).json({ likeCount: countResult.rows[0].CNT, isLiked });
+  } catch (err) {
+    res.status(500).json({ error: "조회 실패" });
+  } finally {
+    if (connection) await connection.close();
+  }
+});
+
+// 댓글 목록 조회
+router.get('/:postId/comments', async (req, res) => {
+  const { postId } = req.params;
+  let connection;
+  try {
+    connection = await db.getPool().getConnection();
+    const sql = `
+      SELECT c.COMMENT_ID as "commentId", c.CONTENT as "content", 
+             u.NICKNAME as "nickname", c.CREATED_AT as "createdAt",
+             c.PARENT_COMMENT_ID as "parentCommentId"
+      FROM CL_COMMENTS c
+      JOIN CL_USERS u ON c.USER_ID = u.USER_ID
+      WHERE c.POST_ID = :postId AND c.DELETED_AT IS NULL
+      ORDER BY c.CREATED_AT ASC
+    `;
+    const result = await connection.execute(sql, { postId });
+    res.status(200).json({ comments: result.rows });
+  } catch (err) {
+    res.status(500).json({ error: "댓글 조회 실패" });
+  } finally {
+    if (connection) await connection.close();
+  }
+});
+
+// 댓글 작성
+router.post('/:postId/comments', protect, async (req, res) => {
+  const { postId } = req.params;
+  const { content } = req.body;
+  const userId = req.user.userId;
+  
+  let connection;
+  try {
+    connection = await db.getPool().getConnection();
+    const sql = `INSERT INTO CL_COMMENTS (COMMENT_ID, POST_ID, USER_ID, CONTENT) 
+                 VALUES (SEQ_CL_COMMENTS.NEXTVAL, :postId, :userId, :content)`;
+    await connection.execute(sql, { postId, userId, content });
+    await connection.commit();
+    res.status(201).json({ message: "댓글 작성 성공" });
+  } catch (err) {
+    if (connection) await connection.rollback();
+    res.status(500).json({ error: "댓글 작성 실패" });
+  } finally {
+    if (connection) await connection.close();
+  }
+});
+
+router.get('/me', protect, async (req, res) => {
+  const userId = req.user.userId;
+  let connection;
+  try {
+    connection = await db.getPool().getConnection();
+    
+    // CL_POSTS(p)와 CL_POST_IMAGES(i)를 조인
+    // 게시글당 이미지가 여러 장일 수 있으므로, 각 게시글의 첫 번째 이미지 하나만 가져오기 위해 
+    // 서브쿼리 또는 GROUP BY를 사용합니다.
+    const sql = `
+      SELECT p.POST_ID as "postId", 
+             p.TITLE as "title", 
+             (SELECT MIN(i.IMAGE_URL) 
+              FROM CL_POST_IMAGES i 
+              WHERE i.POST_ID = p.POST_ID) as "imageUrl"
+      FROM CL_POSTS p
+      WHERE p.USER_ID = :userId AND p.DELETED_AT IS NULL
+      ORDER BY p.CREATED_AT DESC
+    `;
+    
+    const result = await connection.execute(sql, { userId });
+    
+    res.status(200).json({ 
+      posts: result.rows,
+      postCount: result.rows.length 
+    });
+  } catch (err) {
+    console.error("게시글 조회 에러:", err);
+    res.status(500).json({ error: "게시글 조회 실패" });
+  } finally {
+    if (connection) await connection.close();
+  }
+});
+
+// 특정 유저의 게시글 리스트 조회
+router.get('/user/:userId', async (req, res) => {
+  const { userId } = req.params;
+  try {
+    const connection = await db.getPool().getConnection();
+    const sql = `SELECT * FROM POSTS WHERE USER_ID = :userId ORDER BY CREATED_AT DESC`;
+    const result = await connection.execute(sql, [userId]);
+    await connection.close();
+    
+    res.json({ posts: result.rows });
+  } catch (err) {
+    res.status(500).json({ error: "게시글 조회 실패" });
+  }
+});
 
 module.exports = router;

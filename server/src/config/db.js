@@ -13,7 +13,7 @@ async function connectDB() {
       user: process.env.db_user,
       password: process.env.db_password,
       connectString: process.env.db_address,
-      poolMax: 10, // 최대 커넥션 개수 (HikariCP의 maximum-pool-size)
+      poolMax: 200, // 최대 커넥션 개수 (HikariCP의 maximum-pool-size)
       poolMin: 2,  // 최소 유지 커넥션 개수
       poolIncrement: 1
     });

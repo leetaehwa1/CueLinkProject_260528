@@ -340,4 +340,26 @@ router.get('/profile', protect, async (req, res) => {
   }
 });
 
+// [추가] 내가 쓴 게시글 조회
+router.get('/me', protect, async (req, res) => {
+  const userId = req.user.userId; // authMiddleware(protect)에서 추출한 ID
+  let connection;
+  try {
+    connection = await db.getPool().getConnection();
+    const sql = `
+      SELECT POST_ID as "postId", TITLE as "title", CONTENT as "content", 
+             IMAGE_URL as "imageUrl", CREATED_AT as "createdAt"
+      FROM CL_POSTS
+      WHERE USER_ID = :userId AND DELETED_AT IS NULL
+      ORDER BY CREATED_AT DESC
+    `;
+    const result = await connection.execute(sql, { userId });
+    res.status(200).json({ data: result.rows });
+  } catch (err) {
+    res.status(500).json({ error: "내 게시글 조회 실패" });
+  } finally {
+    if (connection) await connection.close();
+  }
+});
+
 module.exports = router;

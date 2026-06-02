@@ -5,6 +5,9 @@ const db = require("./config/db"); // 설계한 DB 설정 모듈 로드
 const passport = require('passport'); // 1. 임포트!
 require('./config/passport');
 
+const http = require('http'); // 1. http 모듈 추가
+const { Server } = require('socket.io'); // 2. socket.io 추가
+
 require('dotenv').config();
 
 
@@ -20,12 +23,7 @@ app.use(express.urlencoded({ extended: true }));
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views')); 
 
-
-// 2. 만약 파일이 server/uploads/editor에 있다면 이 설정이 필요합니다.
-app.use('/uploads/editor', express.static(path.join(__dirname, 'uploads/editor')));
-// profiles 폴더 연결
-app.use('/uploads/profiles', express.static(path.join(__dirname, 'src/uploads/profiles')));
-
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // 회원가입 및 로그인
 const authRouter = require("./routes/auth");
@@ -33,6 +31,40 @@ app.use("/api/auth", authRouter);
 // 게시글
 const postsRouter = require("./routes/posts");
 app.use('/api/posts', postsRouter);
+// 프로필
+const userRoutes = require('./routes/users');
+app.use('/api/users', userRoutes);
+// 팔로우 기능
+const followsRoutes = require('./routes/follows')
+app.use('/api/follows', followsRoutes);
+// 채팅 기능
+const chatRoutes = require('./routes/chats')
+app.use('/api/chats', chatRoutes);
+// 3. 서버 객체 생성 (app을 http 서버로 래핑)
+const server = http.createServer(app);
+
+// 4. Socket.io 설정
+const io = new Server(server, {
+  cors: {
+    origin: "http://localhost:5173", // 프론트엔드 주소
+    methods: ["GET", "POST"]
+  }
+});
+
+// 5. 소켓 이벤트 로직
+io.on('connection', (socket) => {
+  console.log('⚡ 유저 접속:', socket.id);
+
+  socket.on('join_room', (roomId) => {
+    socket.join(roomId);
+    console.log(`유저가 방에 입장함: ${roomId}`);
+  });
+
+  socket.on('send_message', (data) => {
+    // 같은 방에 있는 모든 유저에게 메시지 전송
+    io.to(data.roomId).emit('receive_message', data);
+  });
+});
 
 // [MVP 관리]: 나머지 기능 개발 시 주석을 하나씩 해제합니다.
 // app.use("/api/users", require("./routes/user"));
@@ -43,18 +75,17 @@ app.use('/api/posts', postsRouter);
 
 const PORT = process.env.PORT || 4000;
 
-// 서버 인프라 구동 프로세스
+// 기존 startServer 함수 수정
 async function startServer() {
   try {
-    // 1단계: 의존성의 핵심인 DB 연결 풀을 우선적으로 로드합니다.
     await db.connectDB();
 
-    // 2단계: DB 인프라가 확보되면 포트를 열고 클라이언트 요청을 대기합니다.
-    app.listen(PORT, () => {
+    // app.listen이 아니라 server.listen을 사용해야 합니다!
+    server.listen(PORT, () => {
       console.log(`🚀 [SERVER] CueLink 아키텍트 엔진 구동 완료: http://localhost:${PORT}`);
     });
   } catch (err) {
-    console.error('❌ [CRITICAL] 시스템 초기화 실패. 프로세스를 안전하게 종료합니다.', err);
+    console.error('❌ [CRITICAL] 시스템 초기화 실패', err);
     process.exit(1); 
   }
 }

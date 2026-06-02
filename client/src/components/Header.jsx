@@ -6,6 +6,7 @@ import api from '../api'; // axios 인스턴스
 function Header() {
   const navigate = useNavigate();
   const [user, setUser] = useState(null);
+  
 
   // const checkAuth = async () => {
   //   const token = localStorage.getItem('token');
