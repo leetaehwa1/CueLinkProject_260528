@@ -431,17 +431,53 @@ router.get('/me', protect, async (req, res) => {
 });
 
 // 특정 유저의 게시글 리스트 조회
+// [이 코드로 450행 근처를 완전히 교체하세요]
+// posts.js의 해당 라우터를 이렇게 교체하세요
 router.get('/user/:userId', async (req, res) => {
   const { userId } = req.params;
+  let connection;
+  
   try {
-    const connection = await db.getPool().getConnection();
-    const sql = `SELECT * FROM POSTS WHERE USER_ID = :userId ORDER BY CREATED_AT DESC`;
-    const result = await connection.execute(sql, [userId]);
+    connection = await db.getPool().getConnection();
+
+    // 1. CLOB을 TO_CHAR로 변환하고, 이미지를 LEFT JOIN으로 가져옵니다.
+    // 주의: 이미지가 여러 장일 경우 게시글이 중복될 수 있으므로, 
+    // 서브쿼리(MIN)를 사용하여 대표 이미지 1장만 가져오도록 구성했습니다.
+    const sql = `
+      SELECT p.POST_ID, p.USER_ID, p.TITLE, 
+             TO_CHAR(p.CONTENT) as CONTENT, 
+             TO_CHAR(p.CREATED_AT, 'YYYY-MM-DD HH24:MI:SS') as CREATED_AT,
+             (SELECT MIN(i.IMAGE_URL) 
+              FROM CL_POST_IMAGES i 
+              WHERE i.POST_ID = p.POST_ID) as IMAGE_URL
+      FROM CL_POSTS p
+      WHERE p.USER_ID = :userId AND p.DELETED_AT IS NULL
+      ORDER BY p.CREATED_AT DESC
+    `;
+
+    // 2. 쿼리 실행 (outFormat 4002는 oracledb.OUT_FORMAT_OBJECT)
+    const result = await connection.execute(sql, { userId }, { outFormat: 4002 });
+
+    // 3. 데이터 정제: 모든 CLOB 스트림을 일반 문자열로 확정
+    const posts = (result.rows || []).map(row => ({
+      postId: row.POST_ID,
+      userId: row.USER_ID,
+      title: row.TITLE,
+      content: row.CONTENT || "", // CLOB -> String 강제
+      createdAt: row.CREATED_AT,
+      imageUrl: row.IMAGE_URL || "/default-image.png" // 이미지가 없을 경우 대비
+    }));
+
     await connection.close();
-    
-    res.json({ posts: result.rows });
+    connection = null;
+
+    // 4. 안전하게 응답
+    return res.status(200).json({ posts });
+
   } catch (err) {
-    res.status(500).json({ error: "게시글 조회 실패" });
+    if (connection) await connection.close();
+    console.error("최종 해결 에러 상세:", err);
+    return res.status(500).json({ error: "게시글 조회 중 서버 에러" });
   }
 });
 

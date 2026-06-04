@@ -37,36 +37,25 @@ function GlobalChatPage() {
     };
   }, []);
 
-  // 3. 메시지 전송 로직 (소켓 + DB 저장)
   const handleSend = async () => {
-    if (!content.trim()) return;
+  if (!content.trim()) return;
 
-    const currentNickname = localStorage.getItem('nickname');
-    const currentUserId = parseInt(localStorage.getItem('userId'));
-    const currentProfile = localStorage.getItem('profileImage');
-
-    // 실시간 전송할 데이터 구조
-    const messageData = {
-     roomId: '1',
-      content: content,
-      SENDER_ID: currentUserId,
-      NICKNAME: currentNickname, // 여기서 다시 한 번 찍어보세요
-      PROFILE_IMAGE_URL: currentProfile
-    };
-console.log("🚀 전송 직전 데이터:", messageData); // <--- 이 로그 확인!
-    try {
-      // 1) DB에 저장 요청
-      await api.post('/chats/1/messages', { content });
-      
-      // 2) 소켓으로 실시간 전송
-      socket.emit('send_message', messageData);
-      
-      setContent('');
-    } catch (err) {
-      console.error("메시지 전송 실패:", err);
-      alert("전송 실패");
-    }
+  const messageData = {
+    roomId: '1',
+    CONTENT: content, // 서버와 대문자 필드명 통일
+    SENDER_ID: parseInt(localStorage.getItem('userId'))
   };
+
+  try {
+    // 1. DB 저장
+    await api.post('/chats/1/messages', { content });
+    // 2. 소켓 전송 (필요한 정보만 최소화)
+    socket.emit('send_message', messageData);
+    setContent('');
+  } catch (err) {
+    alert("전송 실패");
+  }
+};
 
   return (
     <Container maxWidth="md" sx={{ mt: 4 }}>

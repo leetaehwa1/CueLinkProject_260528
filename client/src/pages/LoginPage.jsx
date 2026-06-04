@@ -50,9 +50,12 @@ function LoginPage() {
         
         localStorage.setItem('token', accessToken);
         localStorage.setItem('userId', user.userId); // [수정] user 객체 안의 userId
+        localStorage.setItem('nickname', user.nickname); // [추가] 닉네임 저장
+        localStorage.setItem('profileImage', user.profileImage);
         
         console.log("저장된 userId:", user.userId); // 확인용
-        navigate('/');
+        console.log(response.data.data);
+        window.location.href = '/';
       }
     } catch (e) { 
       console.error(e);

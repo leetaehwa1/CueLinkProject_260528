@@ -5,7 +5,7 @@ import FavoriteIcon from '@mui/icons-material/Favorite';
 import api from '../api';
 import FollowButton from '../components/FollowButton';
 import FollowModal from '../components/FollowModal';
-import { useParams } from 'react-router-dom'; // 1. 상단에 임포트 확인
+import { useParams, useNavigate } from 'react-router-dom'; // 1. 상단에 임포트 확인
 
 function ProfilePage() {
   const { userId: urlUserId } = useParams(); // URL 파라미터
@@ -19,36 +19,49 @@ function ProfilePage() {
   const [isLiked, setIsLiked] = useState(false); // 좋아요 상태
   const [likeCount, setLikeCount] = useState(0); // 좋아요 수
   const [isFollowing, setIsFollowing] = useState(false);
+  const [followerCount, setFollowerCount] = useState(0);
   // ProfilePage.jsx 내부
   const [modalConfig, setModalConfig] = useState({ open: false, type: 'followers' });
   // 조회할 유저 ID 결정 (URL에 있으면 타인, 없으면 본인)
+  const [isExpanded, setIsExpanded] = useState(false);
+  const navigate = useNavigate();
   
-  
+  // 메시지 버튼 클릭 핸들러 추가
+  const handleMessage = async () => {
+    try {
+      // 1:1 채팅방 생성 또는 조회 API 호출
+      const res = await api.post(`/chats/direct/${targetId}`);
+      console.log(targetId)
+      // 채팅 페이지로 이동 (roomId를 파라미터로 넘김)
+      navigate(`/chat/${res.data.roomId}`);
+    } catch (err) {
+      console.error("채팅방 입장 실패:", err);
+      alert("채팅방을 열 수 없습니다.");
+    }
+  };
 
-
+  // 1. useEffect에 followerCount 초기화 추가
   useEffect(() => {
     const fetchProfileData = async () => {
       try {
-        // 1. 유저 정보 조회
         const userRes = await api.get(`/users/${targetId}`);
         setUser(userRes.data.data);
-        // --- 여기를 확인하세요! ---
-    
-        // 2. 게시글 조회
+        setFollowerCount(userRes.data.data.followers); // <--- 팔로워 수 상태 초기화 필수!
+        
         const postRes = await api.get(`/posts/user/${targetId}`);
         setMyPosts(postRes.data.posts || []);
       } catch (err) {
         console.error("프로필 데이터 로드 실패:", err);
       }
     };
-
     fetchProfileData();
-  }, [targetId]); // targetId가 바뀔 때마다 실행
+  }, [targetId]);
   
 
   // 포스트 클릭 시 데이터 로드
     const handlePostClick = async (post) => {
     setSelectedPost(post);
+    setIsExpanded(false); // 상세창 열 때마다 기본은 접힌 상태
     setIsDetailOpen(true);
     try {
         // 1. 병렬 호출
@@ -98,14 +111,27 @@ function ProfilePage() {
         }
     };
 
-    const handleFollow = async (followingId) => {
+    const handleFollow = async () => {
+      // 1. 서버 통신 전, UI를 미리 업데이트 (Optimistic Update)
+      const isNowFollowing = !isFollowing; // 현재 상태의 반대로 바꿀 것임
+      
+      // 상태 즉시 갱신
+      setIsFollowing(isNowFollowing);
+      setFollowerCount(prev => isNowFollowing ? prev + 1 : prev - 1);
+
       try {
-        const res = await api.post(`/follows/${followingId}`);
-        // res.data.followed 가 true면 팔로우 성공, false면 언팔로우 성공
-        alert(res.data.followed ? "팔로우 성공" : "언팔로우 성공");
-        // 여기에 팔로우 상태 상태값 갱신 로직 추가
+        // 2. 서버 통신 (응답 결과에 따라 다시 한 번 정확히 동기화)
+        const res = await api.post(`/follows/${targetId}`);
+        
+        // 서버가 알려준 실제 상태로 최종 확정 (혹시라도 서버 처리가 실패했을 경우 대비)
+        setIsFollowing(res.data.followed); 
       } catch (err) {
-        alert("처리 실패");
+        console.error("팔로우 처리 실패:", err);
+        
+        // 3. 실패 시, UI를 원래대로 롤백 (Undo)
+        setIsFollowing(!isNowFollowing);
+        setFollowerCount(prev => isNowFollowing ? prev - 1 : prev + 1);
+        alert("처리 실패. 다시 시도해주세요.");
       }
     };
 
@@ -137,7 +163,7 @@ function ProfilePage() {
             
             {/* 1. 팔로워/팔로잉 숫자 클릭 시 모달 오픈 */}
             <Typography sx={{ cursor: 'pointer' }} onClick={() => setModalConfig({ open: true, type: 'followers' })}>
-              팔로워 <b>{user.followers}</b>
+              팔로워 <b>{followerCount}</b>
             </Typography>
             <Typography sx={{ cursor: 'pointer' }} onClick={() => setModalConfig({ open: true, type: 'following' })}>
               팔로잉 <b>{user.following}</b>
@@ -145,11 +171,22 @@ function ProfilePage() {
           </Box>
 
           <Box sx={{ display: 'flex', gap: 1 }}>
-            {/* 본인 프로필일 때만 프로필 편집 표시 */}
             {targetId === currentUserId ? (
               <Button variant="outlined" size="small">프로필 편집</Button>
             ) : (
-              <FollowButton targetUserId={targetId} isInitialFollowing={isFollowing} />
+              <>
+                <Button 
+                  variant={isFollowing ? "outlined" : "contained"} 
+                  size="small" 
+                  onClick={handleFollow} // 위에서 완성한 handleFollow 사용
+                >
+                  {isFollowing ? '팔로잉' : '팔로우'}
+                </Button>
+                
+                <Button variant="outlined" size="small" onClick={handleMessage} sx={{ ml: 1 }}>
+                  메시지
+                </Button>
+              </>
             )}
           </Box>
         </Box>
@@ -179,6 +216,33 @@ function ProfilePage() {
             </Box>
             <Box sx={{ width: { md: '350px' }, display: 'flex', flexDirection: 'column', p: 2 }}>
               <Typography variant="h6">{selectedPost.title}</Typography>
+              
+              {/* 내용 및 더보기 영역 */}
+              <Box sx={{ my: 1 }}>
+                <Typography 
+                  variant="body2" 
+                  sx={{ 
+                    whiteSpace: 'pre-line',
+                    display: '-webkit-box',
+                    WebkitLineClamp: isExpanded ? 'unset' : 3, // 펼쳐지면 제한 해제
+                    WebkitBoxOrient: 'vertical',
+                    overflow: 'hidden'
+                  }}
+                >
+                  {selectedPost.content}
+                </Typography>
+                
+                {/* 내용이 3줄 이상일 때만 더보기 버튼 표시 */}
+                {selectedPost.content && selectedPost.content.length > 100 && ( 
+                  <Button 
+                    size="small" 
+                    onClick={() => setIsExpanded(!isExpanded)}
+                    sx={{ p: 0, minWidth: 'auto', mt: 0.5, fontSize: '0.75rem' }}
+                  >
+                    {isExpanded ? '접기' : '...더보기'}
+                  </Button>
+                )}
+              </Box>
               
               {/* 좋아요 버튼 영역 */}
               <Box sx={{ display: 'flex', alignItems: 'center', my: 1 }}>

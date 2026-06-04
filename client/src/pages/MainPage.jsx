@@ -23,6 +23,9 @@ function MainPage() {
   
   const [comments, setComments] = useState({});
   const [commentTexts, setCommentTexts] = useState({});
+
+  const [keyword, setKeyword] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
   
   // 상세 모달 상태
   const [isDetailOpen, setIsDetailOpen] = useState(false);
@@ -40,6 +43,27 @@ function MainPage() {
   const { ref, inView } = useInView();
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
+
+  // 2. 실시간 검색 useEffect
+    useEffect(() => {
+      // 검색어가 없으면 결과 초기화
+      if (!keyword.trim()) {
+        setSearchResults([]);
+        return;
+      }
+
+      // 0.5초(500ms) 동안 입력이 없을 때만 서버 호출
+      const handler = setTimeout(async () => {
+        try {
+          const res = await api.get(`/users/search?keyword=${keyword}`);
+          setSearchResults(res.data.users); // 서버에서 검색된 사용자 목록 반환
+        } catch (err) {
+          console.error("검색 실패", err);
+        }
+      }, 500);
+
+      return () => clearTimeout(handler); // 이전 타이머 삭제
+    }, [keyword]);
 
   const fetchComments = async (postId) => {
     try {
@@ -106,16 +130,30 @@ function MainPage() {
     }
   };
 
+  // 2. fetchMainFeed 수정 (검색 파라미터 추가)
   const fetchMainFeed = async (pageNum, isReset = false) => {
     try {
       const currentUserId = localStorage.getItem('userId');
-      const params = { page: pageNum, limit: 5, userId: currentUserId, ...(selectedCategory !== 0 && { categoryId: selectedCategory }) };
+      // keyword 파라미터 추가
+      const params = { 
+          page: pageNum, 
+          limit: 5, 
+          userId: currentUserId, 
+          ...(selectedCategory !== 0 && { categoryId: selectedCategory }),
+          ...(keyword && { keyword: keyword }) // 검색어 포함
+      };
       const response = await api.get('/posts', { params });
       const newPosts = response.data.data.posts;
       setPosts(prev => isReset ? newPosts : [...prev, ...newPosts]);
       setHasMore(newPosts.length === 5);
       newPosts.forEach(p => fetchComments(p.postId));
     } catch (error) { console.error(error); }
+  };
+
+  // 3. 검색 실행 함수
+  const handleSearch = () => {
+      setPage(1);
+      fetchMainFeed(1, true);
   };
 
   const handleLike = async (postId) => {
@@ -129,6 +167,28 @@ function MainPage() {
         return post;
       }));
     } catch (err) { alert('좋아요 처리 실패'); }
+  };
+  
+  const ReadMore = ({ text, maxLength = 60 }) => {
+    const [isExpanded, setIsExpanded] = useState(false);
+
+    if (!text) return null;
+    if (text.length <= maxLength) return <Typography variant="body2">{text}</Typography>;
+
+    return (
+      <Box>
+        <Typography variant="body2" sx={{ color: '#444', whiteSpace: 'pre-wrap' }}>
+          {isExpanded ? text : `${text.substring(0, maxLength)}...`}
+          <Button 
+            size="small" 
+            onClick={() => setIsExpanded(!isExpanded)}
+            sx={{ ml: 0.5, p: 0, textTransform: 'none', fontWeight: 'bold' }}
+          >
+            {isExpanded ? '간략히' : '더보기'}
+          </Button>
+        </Typography>
+      </Box>
+    );
   };
 
   useEffect(() => {
@@ -149,53 +209,58 @@ function MainPage() {
         </Box>
 
         <Stack gap={2}>
-          {posts.map((post, index) => (
-            <Card key={`${post.postId}-${index}`} sx={{ borderRadius: 3, boxShadow: 'none', border: '1px solid #dbdbdb', p: 1.5 }}>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-
-                {/* 이 부분에 cursor: pointer와 onClick 추가 */}
-                <Box 
-                  sx={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }} 
-                  onClick={() => navigate(`/profile/${post.userId}`)}
-                >
-                  <Avatar sx={{ width: 32, height: 32, mr: 1, fontSize: '0.8rem' }}>
-                    {post.nickname?.[0]}
-                  </Avatar>
-                  <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
-                    {post.nickname}
-                  </Typography>
+          {posts.length > 0 ? (
+            posts.map((post, index) => (
+              <Card key={`${post.postId}-${index}`} sx={{ borderRadius: 3, boxShadow: 'none', border: '1px solid #dbdbdb', p: 1.5 }}>
+                {/* ... 기존 카드 내부 내용 그대로 유지 ... */}
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }} onClick={() => navigate(`/profile/${post.userId}`)}>
+                    <Avatar sx={{ width: 32, height: 32, mr: 1, fontSize: '0.8rem' }}>{post.nickname?.[0]}</Avatar>
+                    <Typography variant="body2" sx={{ fontWeight: 'bold' }}>{post.nickname}</Typography>
+                  </Box>
+                  {Number(post.userId) === currentUserId && (
+                    <Button onClick={(e) => handleMenuOpen(e, post.postId)} sx={{ minWidth: 'auto' }}><MoreVertIcon /></Button>
+                  )}
                 </Box>
 
-                {Number(post.userId) === currentUserId && (
-                  <Button onClick={(e) => handleMenuOpen(e, post.postId)} sx={{ minWidth: 'auto' }}>
-                    <MoreVertIcon />
-                  </Button>
+                {post.imageUrl && (
+                  <CardMedia component="img" image={`http://localhost:4000${post.imageUrl}`} sx={{ width: '100%', borderRadius: 2, mb: 1 }} />
                 )}
-              </Box>
 
-              {post.imageUrl && (
-                <CardMedia component="img" image={`http://localhost:4000${post.imageUrl}`} sx={{ width: '100%', borderRadius: 2, mb: 1 }} />
-              )}
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                  <IconButton onClick={() => handleLike(post.postId)} color={post.isLiked === 1 ? "error" : "default"}>
+                    {post.isLiked === 1 ? <FavoriteIcon /> : <FavoriteBorderIcon />}
+                  </IconButton>
+                  <Typography variant="body2">{post.likeCount}명이 좋아합니다</Typography>
+                  <Button size="small" onClick={() => handleOpenDetail(post)}>댓글 {comments[post.postId]?.length || 0}개 보기</Button>
+                </Box>
+                
+                <Box sx={{ mb: 1 }}>
+                  <Typography variant="body2" sx={{ fontWeight: 'bold', mb: 0.5 }}>{post.title}</Typography>
+                  <ReadMore text={post.content} maxLength={50} /> 
+                </Box>
 
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                <IconButton onClick={() => handleLike(post.postId)} color={post.isLiked === 1 ? "error" : "default"}>
-                  {post.isLiked === 1 ? <FavoriteIcon /> : <FavoriteBorderIcon />}
-                </IconButton>
-                <Typography variant="body2">{post.likeCount}명이 좋아합니다</Typography>
-                <Button size="small" onClick={() => handleOpenDetail(post)}>댓글 {comments[post.postId]?.length || 0}개 보기</Button>
-              </Box>
-              
-              <Box sx={{ mb: 1 }}>
-                <Typography variant="body2" sx={{ fontWeight: 'bold', mb: 0.5 }}>{post.title}</Typography>
-                <Typography variant="body2" sx={{ color: '#444' }}>{post.content}</Typography>
-              </Box>
-
-              <Typography variant="caption" sx={{ fontSize: '0.65rem', color: 'text.secondary' }}>
-                {dayjs(post.createdAt).format('YYYY.MM.DD')}
-              </Typography>
-            </Card>
-          ))}
-          {/* 무한스크롤 감지용 div 추가 */}
+                <Typography variant="caption" sx={{ fontSize: '0.65rem', color: 'text.secondary' }}>
+                  {dayjs(post.createdAt).format('YYYY.MM.DD')}
+                </Typography>
+              </Card>
+            ))
+          ) : (
+            // 게시글이 없을 때 보여줄 빈 화면
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', mt: 10, p: 3, color: 'text.secondary' }}>
+              <Typography variant="h6" sx={{ mb: 1 }}>게시물이 없습니다.</Typography>
+              <Typography variant="body2" sx={{ mb: 3 }}>첫 번째 게시글의 주인공이 되어보세요!</Typography>
+              <Button 
+                variant="contained" 
+                onClick={() => navigate('/write')}
+                sx={{ borderRadius: 2 }}
+              >
+                글 작성하러 가기
+              </Button>
+            </Box>
+          )}
+          
+          {/* 무한스크롤 감지용 div */}
           <Box ref={ref} sx={{ height: '20px', mt: 2 }} /> 
         </Stack>
 
@@ -206,10 +271,24 @@ function MainPage() {
               <CardMedia component="img" image={`http://localhost:4000${selectedPost.imageUrl}`} sx={{ flex: 1, objectFit: 'contain', bgcolor: '#000' }} />
               <Box sx={{ flex: 1, p: 2, display: 'flex', flexDirection: 'column' }}>
                 <Typography variant="h6">{selectedPost.nickname}</Typography>
-                <Typography variant="body1" sx={{ mt: 1, mb: 2 }}>{selectedPost.content}</Typography>
+                <Typography 
+                  variant="body1" 
+                  sx={{ 
+                    mt: 1, 
+                    mb: 2, 
+                    wordBreak: 'break-all', // <--- 이 속성이 핵심입니다!
+                    whiteSpace: 'pre-wrap'  // <--- 엔터(줄바꿈)가 유지되도록 추가
+                  }}
+                >
+                  {selectedPost.content}
+                </Typography>
                 <Box sx={{ flexGrow: 1, overflowY: 'auto', borderTop: '1px solid #eee', pt: 2 }}>
                   {comments[selectedPost.postId]?.map(c => (
-                    <Typography key={c.commentId} variant="body2" sx={{ mb: 1 }}>
+                    <Typography 
+                      key={c.commentId} 
+                      variant="body2" 
+                      sx={{ mb: 1, wordBreak: 'break-all' }} // 댓글에도 동일하게 적용
+                    >
                       <strong>{c.nickname}</strong> {c.content}
                     </Typography>
                   ))}

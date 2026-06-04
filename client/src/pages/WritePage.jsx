@@ -6,30 +6,43 @@ import api from '../api';
 function WritePage() {
   const navigate = useNavigate();
   const [formData, setFormData] = useState({ title: '', content: '', categoryId: 1 });
-  const [file, setFile] = useState(null); // 파일 상태 추가
+  const [file, setFile] = useState(null);
+  const [previewUrl, setPreviewUrl] = useState(null);
   const [categories, setCategories] = useState([]);
+  const [isImageSelected, setIsImageSelected] = useState(false);
+
+  useEffect(() => {
+    api.get('/posts/categories').then(res => setCategories(res.data.data));
+  }, []);
+
+  const handleFileChange = (e) => {
+    const selectedFile = e.target.files[0];
+    if (selectedFile) {
+      setFile(selectedFile);
+      setPreviewUrl(URL.createObjectURL(selectedFile));
+      setIsImageSelected(true);
+    }
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
 
-    // 1. FormData 객체 생성
+    if (!file) {
+      alert('사진을 먼저 선택해주세요!');
+      return;
+    }
+
     const data = new FormData();
     data.append('categoryId', formData.categoryId);
     data.append('title', formData.title);
     data.append('content', formData.content);
     data.append('isPromotion', 'N');
-    if (file) {
-      data.append('image', file); // 파일이 있을 때만 추가
-    }
+    data.append('image', file);
 
     try {
-      // 2. 전송 (중요: JSON이 아니라 data를 전송해야 합니다!)
       await api.post('/posts', data, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
+        headers: { 'Content-Type': 'multipart/form-data' },
       });
-      
       alert('등록 완료!');
       navigate('/');
     } catch (err) {
@@ -38,43 +51,53 @@ function WritePage() {
     }
   };
 
-  useEffect(() => {
-    api.get('/posts/categories').then(res => setCategories(res.data.data));
-  }, []);
-
   return (
     <Container maxWidth="sm" sx={{ mt: 4 }}>
-      <Typography variant="h5" sx={{ mb: 2 }}>새 글 작성</Typography>
-      <form onSubmit={handleSubmit}>
-        <FormControl fullWidth sx={{ mb: 2 }}>
-          <InputLabel>카테고리</InputLabel>
-          <Select
-            value={formData.categoryId}
-            label="카테고리"
-            onChange={(e) => setFormData({...formData, categoryId: e.target.value})}
-          >
-            {categories.map((cat) => (
-              <MenuItem key={cat.id} value={cat.id}>{cat.name}</MenuItem>
-            ))}
-          </Select>
-        </FormControl>
+      <Typography variant="h5" sx={{ mb: 3, fontWeight: 'bold' }}>
+        {isImageSelected ? '새 게시물 작성' : '사진 선택'}
+      </Typography>
 
-        <TextField fullWidth label="제목" onChange={(e) => setFormData({...formData, title: e.target.value})} sx={{ mb: 2 }} />
-        <TextField fullWidth label="내용" multiline rows={6} onChange={(e) => setFormData({...formData, content: e.target.value})} sx={{ mb: 2 }} />
-
-        {/* 파일 선택 버튼 */}
-        <Box sx={{ mb: 2 }}>
-          <Button variant="outlined" component="label">
-            사진 첨부
-            <input type="file" hidden onChange={(e) => setFile(e.target.files[0])} />
+      {!isImageSelected ? (
+        <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '400px', border: '2px dashed #ccc', borderRadius: 2 }}>
+          <Button variant="contained" component="label" size="large">
+            사진 선택하기
+            <input type="file" hidden accept="image/*" onChange={handleFileChange} />
           </Button>
-          <Typography variant="caption" sx={{ ml: 2 }}>
-            {file ? file.name : '선택된 파일 없음'}
-          </Typography>
         </Box>
+      ) : (
+        <form onSubmit={handleSubmit}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 3 }}>
+            <img src={previewUrl} alt="preview" style={{ width: '120px', height: '120px', objectFit: 'cover', borderRadius: '8px' }} />
+            <Button variant="text" onClick={() => setIsImageSelected(false)}>사진 변경</Button>
+          </Box>
 
-        <Button type="submit" variant="contained" fullWidth>등록하기</Button>
-      </form>
+          <FormControl fullWidth sx={{ mb: 2 }}>
+            <InputLabel>카테고리</InputLabel>
+            <Select
+              value={formData.categoryId}
+              label="카테고리"
+              onChange={(e) => setFormData({...formData, categoryId: e.target.value})}
+            >
+              {categories.map((cat) => (
+                <MenuItem key={cat.id} value={cat.id}>{cat.name}</MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+
+          <TextField 
+            fullWidth label="제목" sx={{ mb: 2 }} 
+            onChange={(e) => setFormData({...formData, title: e.target.value})} 
+          />
+          <TextField 
+            fullWidth label="내용" multiline rows={6} sx={{ mb: 3 }} 
+            onChange={(e) => setFormData({...formData, content: e.target.value})} 
+          />
+
+          <Button type="submit" variant="contained" fullWidth size="large">
+            등록하기
+          </Button>
+        </form>
+      )}
     </Container>
   );
 }

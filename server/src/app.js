@@ -60,11 +60,36 @@ io.on('connection', (socket) => {
     console.log(`유저가 방에 입장함: ${roomId}`);
   });
 
-  socket.on('send_message', (data) => {
-    // 같은 방에 있는 모든 유저에게 메시지 전송
-    io.to(data.roomId).emit('receive_message', data);
+  socket.on('send_message', async (data) => {
+    let connection;
+    try {
+      const pool = db.getPool();
+      connection = await pool.getConnection();
+
+      // --- [2] 보낸 사람 정보 조회 (닉네임/프로필 표시용) ---
+      const userSql = `SELECT NICKNAME, PROFILE_IMAGE_URL FROM CL_USERS WHERE USER_ID = :id`;
+      const userResult = await connection.execute(userSql, [data.senderId]);
+      
+      const enrichedData = {
+        ...data,
+        NICKNAME: userResult.rows.length > 0 ? userResult.rows[0].NICKNAME : '알 수 없음',
+        PROFILE_IMAGE_URL: userResult.rows.length > 0 ? userResult.rows[0].PROFILE_IMAGE_URL : null,
+        CREATED_AT: new Date()
+      };
+      
+      // --- [3] 같은 방에 있는 사람들에게 실시간 전송 ---
+      io.to(data.roomId).emit('receive_message', enrichedData);
+      
+    } catch (err) {
+      console.error("소켓 처리 오류:", err);
+      if (connection) await connection.rollback();
+    } finally {
+      if (connection) {
+        await connection.close();
+      }
+    }
   });
-});
+}); 
 
 // [MVP 관리]: 나머지 기능 개발 시 주석을 하나씩 해제합니다.
 // app.use("/api/users", require("./routes/user"));
