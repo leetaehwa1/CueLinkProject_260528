@@ -7,12 +7,18 @@ import {
 } from '@mui/material';
 import api from '../api';
 import { useNavigate } from 'react-router-dom';
-import dayjs from 'dayjs';
+
 import { useInView } from 'react-intersection-observer';
 import AddIcon from '@mui/icons-material/Add';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import FavoriteIcon from '@mui/icons-material/Favorite';
 import FavoriteBorderIcon from '@mui/icons-material/FavoriteBorder';
+// 상단 import 부분에 추가
+import dayjs from 'dayjs';
+import relativeTime from 'dayjs/plugin/relativeTime';
+import 'dayjs/locale/ko'; // 한국어 설정
+dayjs.extend(relativeTime);
+dayjs.locale('ko');
 
 function MainPage() {
   const navigate = useNavigate();
@@ -23,6 +29,7 @@ function MainPage() {
   
   const [comments, setComments] = useState({});
   const [commentTexts, setCommentTexts] = useState({});
+  const [parentCommentId, setParentCommentId] = useState(null);
 
   const [keyword, setKeyword] = useState('');
   const [searchResults, setSearchResults] = useState([]);
@@ -43,6 +50,17 @@ function MainPage() {
   const { ref, inView } = useInView();
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
+  const getImageUrl = (path) => {
+    if (!path) return ''; 
+    const timestamp = new Date().getTime(); // 캐시 방지용
+    return `http://localhost:4000${path}?t=${timestamp}`;
+  };
+  
+
+  // 시간 변환 함수
+  const formatRelativeTime = (date) => {
+    return dayjs().to(dayjs(date)); // "n시간 전" 형태 반환
+  };
 
   // 2. 실시간 검색 useEffect
     useEffect(() => {
@@ -66,11 +84,15 @@ function MainPage() {
     }, [keyword]);
 
   const fetchComments = async (postId) => {
-    try {
-      const res = await api.get(`/posts/${postId}/comments`);
-      setComments(prev => ({ ...prev, [postId]: res.data.comments }));
-    } catch (err) { console.error("댓글 로드 실패", err); }
-  };
+  try {
+    const res = await api.get(`/posts/${postId}/comments`);
+    // 이 부분이 핵심입니다. 
+    // 기존 데이터에 덮어씌워져서 화면이 리렌더링되어야 합니다.
+    setComments(prev => ({ ...prev, [postId]: res.data.comments }));
+  } catch (err) { 
+    console.error("댓글 로드 실패", err); 
+  }
+};
 
   const handleOpenDetail = (post) => {
     setSelectedPost(post);
@@ -79,14 +101,19 @@ function MainPage() {
   };
 
   const handleAddComment = async (postId) => {
-    const content = commentTexts[postId];
-    if (!content?.trim()) return;
-    try {
-      await api.post(`/posts/${postId}/comments`, { content });
-      setCommentTexts(prev => ({ ...prev, [postId]: '' }));
-      fetchComments(postId);
-    } catch (err) { alert('댓글 작성 실패'); }
-  };
+  const content = commentTexts[postId];
+  if (!content?.trim()) return;
+  
+  try {
+    await api.post(`/posts/${postId}/comments`, { 
+      content, 
+      parentCommentId: parentCommentId // 위에서 기억한 ID 전송
+    });
+    setCommentTexts(prev => ({ ...prev, [postId]: '' }));
+    setParentCommentId(null); // 답글 모드 해제
+    fetchComments(postId);
+  } catch (err) { alert('댓글 작성 실패'); }
+};
 
   const handleMenuOpen = (event, postId) => {
     setAnchorEl(event.currentTarget);
@@ -168,6 +195,43 @@ function MainPage() {
       }));
     } catch (err) { alert('좋아요 처리 실패'); }
   };
+//   const handleCommentLike = async (commentId, postId) => {
+//   try {
+//     // 1. 서버에 좋아요 요청 전송
+//     await api.post(`/posts/comments/${commentId}/like`);
+    
+//     // 2. 댓글 목록 다시 불러오기 (가장 확실한 방법)
+//     fetchComments(postId);
+//   } catch (err) {
+//     console.error("댓글 좋아요 실패", err);
+//     alert('좋아요 처리 중 오류가 발생했습니다.');
+//   }
+// };
+
+const handleCommentLike = async (commentId, postId) => {
+  try {
+    // 서버에 좋아요 요청 (응답으로 최신 상태를 받아옴)
+    const response = await api.post(`/posts/comments/${commentId}/like`);
+    
+    // 서버가 응답한 결과(isLiked)를 바탕으로 현재 상태를 업데이트
+    setComments(prev => ({
+      ...prev,
+      [postId]: prev[postId].map(c => 
+        c.commentId === commentId 
+          ? { 
+              ...c, 
+              isLiked: response.data.isLiked, // 서버 응답 기반으로 확실하게 설정
+              likeCount: response.data.isLiked ? c.likeCount + 1 : Math.max(0, c.likeCount - 1)
+            }
+          : c
+      )
+    }));
+  } catch (err) {
+    console.error("좋아요 처리 실패", err);
+    alert('좋아요 처리 중 오류가 발생했습니다.');
+  }
+};
+
   
   const ReadMore = ({ text, maxLength = 60 }) => {
     const [isExpanded, setIsExpanded] = useState(false);
@@ -202,20 +266,46 @@ function MainPage() {
   return (
     <Box sx={{ flexGrow: 1, bgcolor: '#fafafa', minHeight: '100vh', pb: 4 }}>
       <Container maxWidth="xs" sx={{ mt: 2 }}>
-        <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 2, bgcolor: 'white', borderRadius: 2 }}>
-          <Tabs value={selectedCategory} onChange={(e, newValue) => setSelectedCategory(newValue)} variant="scrollable" scrollButtons="auto">
-            {categories.map((cat) => <Tab key={cat.id} label={cat.name} value={cat.id} />)}
+        <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3, display: 'flex', justifyContent: 'center' }}>
+          <Tabs 
+            value={selectedCategory} 
+            onChange={(e, newValue) => setSelectedCategory(newValue)} 
+            variant="scrollable" 
+            scrollButtons="auto"
+            TabIndicatorProps={{ sx: { height: 3, borderRadius: 2 } }} // 인디케이터 두껍고 둥글게
+          >
+            {categories.map((cat) => (
+              <Tab 
+                key={cat.id} 
+                label={cat.name} 
+                value={cat.id} 
+                sx={{ fontWeight: 'bold', fontSize: '1rem', px: 3 }} // 폰트 강조
+              />
+            ))}
           </Tabs>
         </Box>
 
         <Stack gap={2}>
           {posts.length > 0 ? (
             posts.map((post, index) => (
-              <Card key={`${post.postId}-${index}`} sx={{ borderRadius: 3, boxShadow: 'none', border: '1px solid #dbdbdb', p: 1.5 }}>
+              <Card key={`${post.postId}-${index}`} sx={{ 
+                  borderRadius: 4, // 좀 더 둥글게
+                  boxShadow: '0 4px 20px rgba(0,0,0,0.05)', // 은은한 그림자
+                  border: 'none', // 테두리 제거
+                  p: 2, 
+                  mb: 3, // 카드 사이 간격 확보
+                  transition: 'transform 0.2s',
+                  '&:hover': { transform: 'translateY(-4px)' } // 마우스 올리면 살짝 떠오르는 효과
+                }}>
                 {/* ... 기존 카드 내부 내용 그대로 유지 ... */}
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
                   <Box sx={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }} onClick={() => navigate(`/profile/${post.userId}`)}>
-                    <Avatar sx={{ width: 32, height: 32, mr: 1, fontSize: '0.8rem' }}>{post.nickname?.[0]}</Avatar>
+                   <Avatar 
+                    src={post.imageUrl ? getImageUrl(post.imageUrl) : ''} 
+                    sx={{ width: 32, height: 32, mr: 1, fontSize: '0.8rem' }}
+                  >
+                    {!post.imageUrl && post.nickname?.[0]}
+                  </Avatar>
                     <Typography variant="body2" sx={{ fontWeight: 'bold' }}>{post.nickname}</Typography>
                   </Box>
                   {Number(post.userId) === currentUserId && (
@@ -224,7 +314,7 @@ function MainPage() {
                 </Box>
 
                 {post.imageUrl && (
-                  <CardMedia component="img" image={`http://localhost:4000${post.imageUrl}`} sx={{ width: '100%', borderRadius: 2, mb: 1 }} />
+                  <CardMedia component="img" image={getImageUrl(post.imageUrl)} sx={{ width: '100%', borderRadius: 2, mb: 1 }} />
                 )}
 
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
@@ -265,40 +355,92 @@ function MainPage() {
         </Stack>
 
         {/* 상세 보기 모달 */}
-        <Dialog open={isDetailOpen} onClose={() => setIsDetailOpen(false)} maxWidth="md" fullWidth>
+        <Dialog open={isDetailOpen} onClose={() => setIsDetailOpen(false)} maxWidth="lg" fullWidth>
           {selectedPost && (
-            <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, maxHeight: '70vh' }}>
-              <CardMedia component="img" image={`http://localhost:4000${selectedPost.imageUrl}`} sx={{ flex: 1, objectFit: 'contain', bgcolor: '#000' }} />
-              <Box sx={{ flex: 1, p: 2, display: 'flex', flexDirection: 'column' }}>
-                <Typography variant="h6">{selectedPost.nickname}</Typography>
-                <Typography 
-                  variant="body1" 
-                  sx={{ 
-                    mt: 1, 
-                    mb: 2, 
-                    wordBreak: 'break-all', // <--- 이 속성이 핵심입니다!
-                    whiteSpace: 'pre-wrap'  // <--- 엔터(줄바꿈)가 유지되도록 추가
-                  }}
-                >
-                  {selectedPost.content}
-                </Typography>
-                <Box sx={{ flexGrow: 1, overflowY: 'auto', borderTop: '1px solid #eee', pt: 2 }}>
-                  {comments[selectedPost.postId]?.map(c => (
-                    <Typography 
-                      key={c.commentId} 
-                      variant="body2" 
-                      sx={{ mb: 1, wordBreak: 'break-all' }} // 댓글에도 동일하게 적용
-                    >
-                      <strong>{c.nickname}</strong> {c.content}
-                    </Typography>
-                  ))}
+            // 전체 컨테이너 높이 고정 및 가로 제한
+            <Box sx={{ display: 'flex', height: '600px', overflow: 'hidden' }}>
+              
+              {/* 1. 왼쪽 이미지 영역: flex: 1.5로 비중을 높이고 minWidth: 0으로 가로 스크롤 방지 */}
+              <Box sx={{ flex: 1.5, bgcolor: '#000', display: 'flex', alignItems: 'center', minWidth: 0 }}>
+                <img 
+                  src={getImageUrl(selectedPost.imageUrl)} 
+                  style={{ width: '100%', height: '100%', objectFit: 'contain' }} 
+                />
+              </Box>
+
+              {/* 2. 오른쪽 정보 영역: flex: 1로 고정 */}
+              <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', bgcolor: 'white', minWidth: '300px' }}>
+                
+                {/* 게시글 작성자 및 내용 */}
+                <Box sx={{ p: 2, borderBottom: '1px solid #eee' }}>
+                  <Typography fontWeight="bold">{selectedPost.nickname}</Typography>
+                  <Typography variant="body2" sx={{ mt: 1 }}>{selectedPost.content}</Typography>
                 </Box>
-                <Box sx={{ display: 'flex', mt: 1 }}>
-                  <TextField size="small" placeholder="댓글 달기..." fullWidth variant="standard" 
+                {/* 댓글 리스트 영역 */}
+                <Box sx={{ flexGrow: 1, overflowY: 'auto', p: 2 }}>
+                  {comments[selectedPost.postId]?.map(c => (
+                <Box key={c.commentId} sx={{ mb: 2, ml: c.parentCommentId ? 4 : 0 }}>
+                  {/* 1. 닉네임과 댓글 내용 나란히 배치 */}
+                  <Typography variant="body2">
+                    <strong style={{ marginRight: '8px' }}>{c.nickname}</strong>
+                    {c.content}
+                  </Typography>
+
+                  {/* 2. 좋아요 개수, 하트 아이콘, 답글달기 나란히 배치 */}
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mt: 0.5 }}>
+                    {/* 좋아요 개수 */}
+                    <Typography variant="caption" color="text.secondary">
+                      좋아요 {c.likeCount}개
+                    </Typography>
+
+                    {/* 하트 아이콘 (isLiked 상태에 따라 색상 변경) */}
+                    <IconButton 
+                      size="small" 
+                      onClick={() => handleCommentLike(c.commentId, selectedPost.postId)}
+                      sx={{ p: 0 }}
+                    >
+                      {c.isLiked ? (
+                        <FavoriteIcon sx={{ fontSize: '16px', color: 'red' }} />
+                      ) : (
+                        <FavoriteBorderIcon sx={{ fontSize: '16px' }} />
+                      )}
+                    </IconButton>
+
+                    {/* 답글달기 */}
+                    <Box sx={{ display: 'flex', gap: 1, mt: 0.5 }}>
+                      <Typography variant="caption" color="text.secondary">
+                        {formatRelativeTime(c.createdAt)}
+                      </Typography>
+                      {!c.parentCommentId && (
+                        <Button 
+                          size="small" 
+                          sx={{ fontSize: '0.7rem', p: 0, color: 'text.secondary', fontWeight: 'bold' }}
+                          onClick={() => {
+                            setParentCommentId(c.commentId);
+                            setCommentTexts({...commentTexts, [selectedPost.postId]: `@${c.nickname} `});
+                            }}
+                            >
+                            답글 달기
+                        </Button>
+                      )}
+                      </Box>
+                  </Box>
+                </Box>
+              ))}
+                </Box>
+
+                {/* 댓글 입력창 (하단 고정) */}
+                <Box sx={{ p: 2, borderTop: '1px solid #eee', display: 'flex', gap: 1 }}>
+                  <TextField 
+                    fullWidth 
+                    size="small" 
+                    placeholder="댓글 달기..." 
                     value={commentTexts[selectedPost.postId] || ''} 
                     onChange={(e) => setCommentTexts({...commentTexts, [selectedPost.postId]: e.target.value})} 
                   />
-                  <Button onClick={() => handleAddComment(selectedPost.postId)}>게시</Button>
+                  <Button variant="contained" onClick={() => handleAddComment(selectedPost.postId)}>
+                    게시
+                  </Button>
                 </Box>
               </Box>
             </Box>

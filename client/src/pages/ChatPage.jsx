@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback,useRef } from 'react';
 import { Box, List, ListItemButton, ListItemAvatar, Avatar, ListItemText, Typography, TextField, Button, Paper } from '@mui/material';
 import api from '../api';
 import socket from '../socket';
@@ -8,11 +8,22 @@ function ChatPage() {
   const { roomId } = useParams();
   const navigate = useNavigate();
   const currentUserId = parseInt(localStorage.getItem('userId'), 10);
+  const messagesEndRef = useRef(null); // 1. useRef 생성
   
   const [rooms, setRooms] = useState([]);
   const [selectedRoom, setSelectedRoom] = useState(null);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
+
+  // 2. 메시지가 바뀔 때마다 실행되는 함수
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  // 3. messages 배열이 바뀔 때마다 스크롤 함수 호출
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
 
   // 1. 방 목록 로드
   useEffect(() => {
@@ -35,13 +46,27 @@ function ChatPage() {
   }, [roomId, rooms]);
 
   // 3. [수신] 메시지 수신 (의존성 배열 빈 값 유지, off 필수)
-  useEffect(() => {
-    const handleReceive = (msg) => {
-      setMessages((prev) => [...prev, msg]);
+  // 3. [수신] 메시지 수신 로직을 이렇게 보강해보세요
+useEffect(() => {
+  const handleReceive = (msg) => {
+    // 서버가 보내주는 데이터 확인용 로그
+    console.log("수신된 메시지 객체:", msg);
+
+    // 데이터가 완전하지 않다면 기본값 세팅 (서버 소켓 로직에 따라 조절)
+    const newMsg = {
+        MESSAGE_ID: msg.MESSAGE_ID || Date.now(), // ID가 없으면 임시 생성
+        SENDER_ID: msg.senderId || msg.SENDER_ID,
+        CONTENT: msg.content || msg.CONTENT,
+        CREATED_AT: msg.createdAt || msg.CREATED_AT || new Date().toISOString(), // 지금 시간이라도 설정
+        NICKNAME: msg.nickname || msg.NICKNAME || "상대방"
     };
-    socket.on('receive_message', handleReceive);
-    return () => socket.off('receive_message', handleReceive);
-  }, []);
+
+    setMessages((prev) => [...prev, newMsg]);
+  };
+  
+  socket.on('receive_message', handleReceive);
+  return () => socket.off('receive_message', handleReceive);
+}, [roomId]); // roomId가 변할 때마다 바인딩이 꼬이지 않게 [roomId]를 넣는 것이 좋습니다.
 
   const sendMessage = useCallback(async () => {
     if (!input.trim()) return;
@@ -54,14 +79,47 @@ function ChatPage() {
     await api.post(`/chats/${roomId}/messages`, { content });
     socket.emit('send_message', { 
         roomId, 
-        senderId: currentUserId, 
+        SENDER_ID: currentUserId, 
         content 
     });
   }, [input, roomId, currentUserId]);
+  
+
+  // 1. 유틸리티 함수를 하나 만듭니다 (컴포넌트 바깥이나 상단에)
+  const formatTime = (time) => {
+    if (!time) return "";
+    
+    // 1. 이미 Date 객체라면 그대로 사용
+    const date = (time instanceof Date) ? time : new Date(time);
+    
+    // 2. 유효한 날짜인지 확인
+    if (isNaN(date.getTime())) return "";
+    
+    // 3. 시간 출력 (오전/오후 등을 고려한 정석 방식)
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+  };
 
   return (
-    <Box sx={{ display: 'flex', height: '80vh', border: '1px solid #ddd', borderRadius: 2, overflow: 'hidden' }}>
-      <Box sx={{ width: '300px', borderRight: '1px solid #ddd', bgcolor: '#f9f9f9', overflowY: 'auto' }}>
+    <Box sx={{ 
+      display: 'flex', 
+      height: 'calc(100vh - 100px)',
+      border: '1px solid', 
+      borderColor: 'divider', 
+      borderRadius: 2, 
+      overflow: 'hidden',
+      bgcolor: 'background.paper' ,
+      mt: 2,
+      width: '100%'
+    }}>
+      {/* 대화 목록 사이드바 */}
+      <Box sx={{ 
+        width: '280px', 
+        flexShrink: 0,
+        borderRight: '1px solid', 
+        borderColor: 'divider', 
+        bgcolor: 'background.default', 
+        overflowY: 'auto' 
+      }}>
         <Typography variant="h6" sx={{ p: 2, fontWeight: 'bold' }}>대화 목록</Typography>
         <List>
           {rooms.map((room) => (
@@ -77,49 +135,69 @@ function ChatPage() {
         </List>
       </Box>
 
-      <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+      {/* 대화 내용 영역 */}
+      <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', bgcolor: 'background.paper', overflow: 'hidden',
+    minWidth: 0 }}>
         {selectedRoom ? (
           <>
-            <Box sx={{ p: 2, borderBottom: '1px solid #ddd', fontWeight: 'bold' }}>{selectedRoom.NICKNAME}님과의 대화</Box>
-            <Box sx={{ flex: 1, overflowY: 'auto', p: 2, bgcolor: '#e5ddd5' }}>
-             {messages.map((m, i) => (
-  <Box key={i} sx={{ display: 'flex', flexDirection: 'column', alignItems: m.SENDER_ID === currentUserId ? 'flex-end' : 'flex-start', mb: 2 }}>
-    {/* 상대방일 때만 닉네임 표시 */}
-    {m.SENDER_ID !== currentUserId && (
-      <Typography variant="caption" sx={{ ml: 1, mb: 0.5, color: 'text.secondary' }}>
-        {m.NICKNAME}
-      </Typography>
-    )}
-    
-    <Box sx={{ display: 'flex', alignItems: 'flex-end', gap: 1 }}>
-      {/* 본인일 때 시간 왼쪽 */}
-      {m.SENDER_ID === currentUserId && (
-        <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.7rem' }}>
-          {m.CREATED_AT.split(' ')[1].substring(0, 5)}
-        </Typography>
-      )}
-
-      <Paper sx={{ p: 1, px: 2, borderRadius: 2, bgcolor: m.SENDER_ID === currentUserId ? '#dcf8c6' : 'white' }}>
-        <Typography variant="body2">{m.CONTENT}</Typography>
-      </Paper>
-
-      {/* 상대방일 때 시간 오른쪽 */}
-      {m.SENDER_ID !== currentUserId && (
-        <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.7rem' }}>
-          {m.CREATED_AT.split(' ')[1].substring(0, 5)}
-        </Typography>
-      )}
-    </Box>
-  </Box>
-))}
+            <Box sx={{ p: 2, borderBottom: '1px solid', borderColor: 'divider', fontWeight: 'bold' }}>
+              {selectedRoom.NICKNAME}님과의 대화
             </Box>
-            <Box sx={{ p: 2, display: 'flex', gap: 1 }}>
+            
+            {/* 채팅창 영역: 다크 모드에선 어둡게, 라이트 모드에선 메신저 느낌으로 */}
+            <Box sx={{ 
+              flex: 1, 
+              overflowY: 'auto', 
+              p: 3, 
+              bgcolor: (theme) => theme.palette.mode === 'dark' ? '#121212' : '#e5ddd5' 
+            }}>
+             {messages.map((m, i) => (
+              <Box key={i} sx={{ display: 'flex', flexDirection: 'column', alignItems: m.SENDER_ID === currentUserId ? 'flex-end' : 'flex-start', mb: 2 }}>
+                {m.SENDER_ID !== currentUserId && (
+                  <Typography variant="caption" sx={{ ml: 1, mb: 0.5, color: 'text.secondary' }}>
+                    {m.NICKNAME}
+                  </Typography>
+                )}
+                
+                <Box sx={{ display: 'flex', alignItems: 'flex-end', gap: 1 }}>
+                  {m.SENDER_ID === currentUserId && (
+                    <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.7rem' }}>
+                      {formatTime(m.CREATED_AT)}
+                    </Typography>
+                  )}
+
+                  <Paper sx={{ 
+                    p: 1.5, 
+                    px: 2, 
+                    borderRadius: 2, 
+                    maxWidth: '85%',
+                    bgcolor: m.SENDER_ID === currentUserId 
+                      ? (theme) => theme.palette.mode === 'dark' ? '#056162' : '#dcf8c6' 
+                      : 'background.paper' 
+                  }}>
+                    <Typography variant="body2" sx={{ color: 'text.primary' }}>{m.CONTENT}</Typography>
+                  </Paper>
+
+                  {m.SENDER_ID !== currentUserId && (
+                    <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.7rem' }}>
+                      {formatTime(m.CREATED_AT)}
+                    </Typography>
+                  )}
+                </Box>
+              </Box>
+            ))}
+            <div ref={messagesEndRef} />
+            </Box>
+            
+            <Box sx={{ p: 2, display: 'flex', gap: 1, bgcolor: 'background.paper', borderTop: '1px solid', borderColor: 'divider' }}>
               <TextField fullWidth size="small" value={input} onChange={(e) => setInput(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && sendMessage()} />
               <Button variant="contained" onClick={sendMessage}>전송</Button>
             </Box>
           </>
         ) : (
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, color: '#999' }}>대화할 상대를 선택하세요.</Box>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, color: 'text.disabled' }}>
+            대화할 상대를 선택하세요.
+          </Box>
         )}
       </Box>
     </Box>

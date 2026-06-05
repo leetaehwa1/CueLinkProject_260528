@@ -24,6 +24,8 @@ app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views')); 
 
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+// 프로필 사진 폴더 매핑 
+// app.use('/uploads/profiles', express.static(path.join(__dirname, 'src/uploads/profiles')));
 
 // 회원가입 및 로그인
 const authRouter = require("./routes/auth");
@@ -45,11 +47,14 @@ const server = http.createServer(app);
 
 // 4. Socket.io 설정
 const io = new Server(server, {
+  
   cors: {
     origin: "http://localhost:5173", // 프론트엔드 주소
     methods: ["GET", "POST"]
   }
-});
+})
+app.set('io', io); // [추가] 라우터에서 io를 사용할 수 있게 설정
+;
 
 // 5. 소켓 이벤트 로직
 io.on('connection', (socket) => {
@@ -68,7 +73,7 @@ io.on('connection', (socket) => {
 
       // --- [2] 보낸 사람 정보 조회 (닉네임/프로필 표시용) ---
       const userSql = `SELECT NICKNAME, PROFILE_IMAGE_URL FROM CL_USERS WHERE USER_ID = :id`;
-      const userResult = await connection.execute(userSql, [data.senderId]);
+      const userResult = await connection.execute(userSql, [data.SENDER_ID]);
       
       const enrichedData = {
         ...data,

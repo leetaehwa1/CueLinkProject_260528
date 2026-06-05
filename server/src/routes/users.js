@@ -2,11 +2,32 @@ const express = require('express');
 const router = express.Router();
 const db = require('../config/db'); // DB 연결 모듈
 const { protect } = require('../middlewares/authMiddleware');
+const multer = require('multer');
+const path = require('path');
+router.use('/editor', express.static(path.join(__dirname, '../../uploads/editor')));
+const fs = require('fs');
+
+// 1. app.js의 정적 경로와 일치하도록 uploads 폴더 경로 생성
+// __dirname이 server/src/routes 이므로, ../../uploads 로 올라가서 폴더를 잡습니다.
+const uploadDir = path.join(__dirname, '../uploads/editor'); 
+
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, uploadDir); // 이곳에 저장
+  },
+  filename: (req, file, cb) => {
+    cb(null, Date.now() + path.extname(file.originalname));
+  }
+});
+const upload = multer({ storage });
 
 router.get('/me', protect, async (req, res) => {
   const { userId } = req.params;
   const myId = req.user.userId; // 로그인한 유저 ID
-  
   let connection;
   try {
     connection = await db.getPool().getConnection();
@@ -14,6 +35,7 @@ router.get('/me', protect, async (req, res) => {
       SELECT u.USER_ID as "userId", 
              u.NICKNAME as "nickname", 
              u.PROFILE_IMAGE_URL as "profileImage",
+             u.BIO as "bio",
              (SELECT COUNT(*) FROM CL_FOLLOWS WHERE FOLLOWING_ID = u.USER_ID) as "followers",
              (SELECT COUNT(*) FROM CL_FOLLOWS WHERE FOLLOWER_ID = u.USER_ID) as "following",
              (SELECT COUNT(*) FROM CL_FOLLOWS WHERE FOLLOWER_ID = :myId AND FOLLOWING_ID = u.USER_ID) as "isFollowing"
@@ -30,7 +52,6 @@ router.get('/me', protect, async (req, res) => {
     if (connection) await connection.close();
   }
 });
-
 
 router.get('/search', async (req, res) => {
   const { keyword } = req.query;
@@ -78,6 +99,7 @@ router.get('/:userId', async (req, res) => {
       SELECT u.USER_ID as "userId", 
              u.NICKNAME as "nickname", 
              u.PROFILE_IMAGE_URL as "profileImage",
+             u.BIO as "bio",
              (SELECT COUNT(*) FROM CL_FOLLOWS WHERE FOLLOWING_ID = u.USER_ID) as "followers",
              (SELECT COUNT(*) FROM CL_FOLLOWS WHERE FOLLOWER_ID = u.USER_ID) as "following"
       FROM CL_USERS u WHERE u.USER_ID = :userId
@@ -96,6 +118,38 @@ router.get('/:userId', async (req, res) => {
   }
 });
 
+router.put('/profile', protect, upload.single('profileImage'), async (req, res) => {
+  const userId = req.user.userId; // protect 미들웨어에서 제공
+  const { nickname, bio } = req.body;
+  const profileImageUrl = req.file ? `/uploads/editor/${req.file.filename}` : null;
 
+  let connection;
+  try {
+    connection = await db.getPool().getConnection();
+    
+    // 기본 UPDATE 쿼리 (이미지 경로 포함 여부에 따라 유연하게 처리)
+    let sql = `UPDATE CL_USERS SET NICKNAME = :nickname, BIO = :bio`;
+    const params = { nickname, bio, userId };
+
+    if (profileImageUrl) {
+      sql += `, PROFILE_IMAGE_URL = :profileImageUrl`;
+      params.profileImageUrl = profileImageUrl;
+    }
+    sql += ` WHERE USER_ID = :userId`;
+
+    await connection.execute(sql, params);
+    await connection.commit();
+
+    res.status(200).json({ 
+        success: true, 
+        profileImageUrl: profileImageUrl // 클라이언트에서 이미지 갱신용으로 사용
+    });
+  } catch (err) {
+    console.error("프로필 업데이트 실패:", err);
+    res.status(500).json({ error: "프로필 수정 실패" });
+  } finally {
+    if (connection) await connection.close();
+  }
+});
 
 module.exports = router;

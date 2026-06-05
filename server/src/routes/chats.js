@@ -24,20 +24,38 @@ router.get('/global', async (req, res) => {
     }
 });
 
-// 2. 내 1:1 채팅방 목록 조회
 router.get('/direct/rooms', protect, async (req, res) => {
     const currentUserId = req.user.userId;
     let connection;
     try {
         connection = await db.getPool().getConnection();
         const sql = `
-            SELECT r.CHAT_ROOM_ID, u.NICKNAME, u.PROFILE_IMAGE_URL
+            SELECT 
+                r.CHAT_ROOM_ID, 
+                u.NICKNAME, 
+                u.PROFILE_IMAGE_URL,
+                m.CONTENT AS "latestMessage",
+                m.CREATED_AT AS "lastTime",
+                (
+                    SELECT COUNT(*) 
+                    FROM CL_CHAT_MESSAGES msg
+                    WHERE msg.CHAT_ROOM_ID = r.CHAT_ROOM_ID
+                    AND msg.MESSAGE_ID > rm.LAST_READ_MESSAGE_ID
+                    AND msg.SENDER_ID <> :currentUserId
+                ) AS "UNREAD_COUNT"
             FROM CL_CHAT_ROOMS r
-            JOIN CL_CHAT_ROOM_MEMBERS m ON r.CHAT_ROOM_ID = m.CHAT_ROOM_ID
-            JOIN CL_USERS u ON m.USER_ID = u.USER_ID
+            JOIN CL_CHAT_ROOM_MEMBERS rm ON r.CHAT_ROOM_ID = rm.CHAT_ROOM_ID
+            JOIN CL_USERS u ON rm.USER_ID = u.USER_ID AND u.USER_ID <> :currentUserId
+            LEFT JOIN (
+                SELECT CHAT_ROOM_ID, CONTENT, CREATED_AT, MESSAGE_ID,
+                       ROW_NUMBER() OVER (PARTITION BY CHAT_ROOM_ID ORDER BY CREATED_AT DESC) as rn
+                FROM CL_CHAT_MESSAGES
+            ) m ON r.CHAT_ROOM_ID = m.CHAT_ROOM_ID AND m.rn = 1
             WHERE r.ROOM_TYPE = 'DIRECT'
-            AND r.CHAT_ROOM_ID IN (SELECT CHAT_ROOM_ID FROM CL_CHAT_ROOM_MEMBERS WHERE USER_ID = :currentUserId)
-            AND u.USER_ID <> :currentUserId
+            AND r.CHAT_ROOM_ID IN (
+                SELECT CHAT_ROOM_ID FROM CL_CHAT_ROOM_MEMBERS WHERE USER_ID = :currentUserId
+            )
+            ORDER BY m.CREATED_AT DESC NULLS LAST
         `;
         const result = await connection.execute(sql, { currentUserId });
         res.json({ rooms: result.rows });
@@ -53,6 +71,7 @@ router.post('/:roomId/messages', protect, async (req, res) => {
     const { roomId } = req.params;
     const { content } = req.body;
     const senderId = req.user.userId;
+    const io = req.app.get('io'); // 여기서 io를 가져옵니다
 
     console.log("🔥 [디버깅] 받은 데이터:", { roomId, content, senderId });
 
@@ -70,6 +89,13 @@ router.post('/:roomId/messages', protect, async (req, res) => {
         `, { roomId, senderId, content });
         
         await connection.commit();
+        // 2. 실시간 알림 전송 (채팅방 멤버들에게)
+        io.to(roomId).emit('receive_notification', {
+            message: `${req.user.nickname}님으로부터 새 메시지가 왔습니다.`,
+            senderId: senderId,
+            roomId: roomId,
+            content: content
+        });
         res.status(201).json({ success: true });
     } catch (err) {
         console.error("🔥 [서버 DB 에러 상세]:", err); // err만 찍지 말고 err를 직접 보세요.
@@ -142,6 +168,7 @@ router.post('/direct/:targetId', protect, async (req, res) => {
 router.get('/:roomId/messages', protect, async (req, res) => {
     const { roomId } = req.params;
     let connection;
+    
     try {
         connection = await db.getPool().getConnection();
         const sql = `
@@ -156,6 +183,38 @@ router.get('/:roomId/messages', protect, async (req, res) => {
         res.status(200).json({ messages: result.rows });
     } catch (err) {
         res.status(500).json({ error: "메시지 로드 실패" });
+    } finally {
+        if (connection) await connection.close();
+    }
+});
+
+// 4. 채팅방 읽음 처리 (입장 시 호출)
+router.post('/:roomId/read', protect, async (req, res) => {
+    const { roomId } = req.params;
+    const userId = req.user.userId;
+    let connection;
+    try {
+        connection = await db.getPool().getConnection();
+        
+        // 해당 방의 가장 최근 메시지 ID를 가져와서 내 LAST_READ_MESSAGE_ID로 업데이트
+        const sql = `
+            UPDATE CL_CHAT_ROOM_MEMBERS 
+            SET LAST_READ_MESSAGE_ID = (
+                SELECT MAX(MESSAGE_ID) 
+                FROM CL_CHAT_MESSAGES 
+                WHERE CHAT_ROOM_ID = :roomId
+            )
+            WHERE CHAT_ROOM_ID = :roomId 
+            AND USER_ID = :userId
+        `;
+        
+        await connection.execute(sql, { roomId, userId });
+        await connection.commit();
+        
+        res.status(200).json({ success: true });
+    } catch (err) {
+        if (connection) await connection.rollback();
+        res.status(500).json({ error: "읽음 처리 실패" });
     } finally {
         if (connection) await connection.close();
     }

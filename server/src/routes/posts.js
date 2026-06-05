@@ -5,6 +5,7 @@ const { sendSuccess, sendError } = require('../utils/response');
 const { protect } = require('../middlewares/authMiddleware');
 const multer = require('multer');
 const path = require('path');
+router.use('/editor', express.static(path.join(__dirname, '../../uploads/editor')));
 const fs = require('fs');
 const oracledb = require('oracledb'); // 이 줄을 추가하세요!
 const { url } = require('inspector');
@@ -351,23 +352,43 @@ router.get('/:postId/likes', async (req, res) => {
 });
 
 // 댓글 목록 조회
-router.get('/:postId/comments', async (req, res) => {
+router.get('/:postId/comments', protect, async (req, res) => {
   const { postId } = req.params;
+  console.log("🔥 미들웨어 통과 직후 req.user:", req.user);
+  const userId = req.user?.userId || 0; // 로그인 안 했을 경우 0으로 처리
+  console.log("조회 요청 유저 ID:", userId); //
   let connection;
+
   try {
     connection = await db.getPool().getConnection();
     const sql = `
-      SELECT c.COMMENT_ID as "commentId", c.CONTENT as "content", 
-             u.NICKNAME as "nickname", c.CREATED_AT as "createdAt",
-             c.PARENT_COMMENT_ID as "parentCommentId"
+      SELECT 
+        c.COMMENT_ID as "commentId", 
+        c.CONTENT as "content", 
+        u.NICKNAME as "nickname", 
+        c.CREATED_AT as "createdAt",
+        c.PARENT_COMMENT_ID as "parentCommentId",
+        (SELECT COUNT(*) FROM CL_COMMENT_LIKES cl WHERE cl.COMMENT_ID = c.COMMENT_ID) as "likeCount",
+        (SELECT COUNT(*) FROM CL_COMMENT_LIKES my WHERE my.COMMENT_ID = c.COMMENT_ID AND my.USER_ID = :userId) as "isLiked"
       FROM CL_COMMENTS c
       JOIN CL_USERS u ON c.USER_ID = u.USER_ID
       WHERE c.POST_ID = :postId AND c.DELETED_AT IS NULL
-      ORDER BY c.CREATED_AT ASC
+      START WITH c.PARENT_COMMENT_ID IS NULL
+      CONNECT BY PRIOR c.COMMENT_ID = c.PARENT_COMMENT_ID
+      ORDER SIBLINGS BY c.CREATED_AT ASC
     `;
-    const result = await connection.execute(sql, { postId });
-    res.status(200).json({ comments: result.rows });
+
+    const result = await connection.execute(sql, { postId, userId });
+    
+    // 결과값을 프론트에서 다루기 편하게 Boolean으로 변환 (선택사항)
+    const formattedComments = result.rows.map(comment => ({
+      ...comment,
+      isLiked: comment.isLiked > 0 
+    }));
+
+    res.status(200).json({ comments: formattedComments });
   } catch (err) {
+    console.error("댓글 조회 실패:", err);
     res.status(500).json({ error: "댓글 조회 실패" });
   } finally {
     if (connection) await connection.close();
@@ -377,20 +398,63 @@ router.get('/:postId/comments', async (req, res) => {
 // 댓글 작성
 router.post('/:postId/comments', protect, async (req, res) => {
   const { postId } = req.params;
-  const { content } = req.body;
+  const { content, parentCommentId } = req.body;
   const userId = req.user.userId;
   
   let connection;
   try {
     connection = await db.getPool().getConnection();
-    const sql = `INSERT INTO CL_COMMENTS (COMMENT_ID, POST_ID, USER_ID, CONTENT) 
-                 VALUES (SEQ_CL_COMMENTS.NEXTVAL, :postId, :userId, :content)`;
-    await connection.execute(sql, { postId, userId, content });
+    const sql = `INSERT INTO CL_COMMENTS (COMMENT_ID, POST_ID, USER_ID, CONTENT, PARENT_COMMENT_ID) 
+                 VALUES (SEQ_CL_COMMENTS.NEXTVAL, :postId, :userId, :content, :parentCommentId)`;
+    await connection.execute(sql, { postId, userId, content, parentCommentId: parentCommentId || null });
     await connection.commit();
     res.status(201).json({ message: "댓글 작성 성공" });
   } catch (err) {
     if (connection) await connection.rollback();
     res.status(500).json({ error: "댓글 작성 실패" });
+  } finally {
+    if (connection) await connection.close();
+  }
+});
+
+router.post('/comments/:commentId/like', protect, async (req, res) => {
+  const { commentId } = req.params;
+  const userId = req.user?.userId;
+
+  if (!userId) return res.status(401).json({ error: "로그인 필요" });
+
+  // 타입을 숫자로 명확히 변환
+  const cId = parseInt(commentId, 10);
+  const uId = parseInt(userId, 10);
+
+  let connection;
+  try {
+    connection = await db.getPool().getConnection();
+    
+    // 1. 이미 좋아요가 있는지 확인
+    const checkSql = `SELECT 1 FROM CL_COMMENT_LIKES WHERE COMMENT_ID = :commentId AND USER_ID = :userId`;
+    const check = await connection.execute(checkSql, { commentId: cId, userId: uId });
+
+    if (check.rows.length > 0) {
+      // 2. 삭제 로직
+      await connection.execute(
+        `DELETE FROM CL_COMMENT_LIKES WHERE COMMENT_ID = :commentId AND USER_ID = :userId`, 
+        { commentId: cId, userId: uId }
+      );
+      await connection.commit(); // 커밋 필수!
+      res.status(200).json({ message: "취소됨", isLiked: false });
+    } else {
+      // 3. 삽입 로직
+      await connection.execute(
+        `INSERT INTO CL_COMMENT_LIKES (LIKE_ID, COMMENT_ID, USER_ID) VALUES (SEQ_CL_COMMENT_LIKES.NEXTVAL, :commentId, :userId)`, 
+        { commentId: cId, userId: uId }
+      );
+      await connection.commit(); // 커밋 필수!
+      res.status(200).json({ message: "좋아요 성공", isLiked: true });
+    }
+  } catch (err) {
+    console.error("좋아요 처리 에러:", err); // 에러 확인을 위한 로그
+    res.status(500).json({ error: "좋아요 처리 실패" });
   } finally {
     if (connection) await connection.close();
   }

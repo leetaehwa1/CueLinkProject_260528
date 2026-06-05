@@ -26,6 +26,13 @@ function ProfilePage() {
   const [isExpanded, setIsExpanded] = useState(false);
   const navigate = useNavigate();
   
+  // 1. 현재 시간을 기반으로 캐시 무효화 쿼리스트링 추가
+  const getImageUrl = (path) => {
+  if (!path) return ''; 
+  const timestamp = new Date().getTime(); // 캐시 방지용
+  return `http://localhost:4000${path}?t=${timestamp}`;
+};
+
   // 메시지 버튼 클릭 핸들러 추가
   const handleMessage = async () => {
     try {
@@ -154,9 +161,13 @@ function ProfilePage() {
   return (
     <Container maxWidth="md" sx={{ mt: 4 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 6, mb: 6 }}>
-        <Avatar sx={{ width: 120, height: 120 }} src={user.profileImage ? `http://localhost:4000${user.profileImage}` : ''} />
+        <Avatar sx={{ width: 120, height: 120 }} src={getImageUrl(user.profileImage)} />
         <Box>
           <Typography variant="h5" sx={{ mb: 2 }}>{user.nickname}</Typography>
+          {/* 소개글 추가 */}
+          <Typography variant="body1" sx={{ mb: 2, color: 'text.secondary' }}>
+            {user.bio || "자기소개가 없습니다."}
+          </Typography>
           
           <Box sx={{ display: 'flex', gap: 3, mb: 2 }}>
             <Typography>게시물 <b>{myPosts.length}</b></Typography>
@@ -172,7 +183,8 @@ function ProfilePage() {
 
           <Box sx={{ display: 'flex', gap: 1 }}>
             {targetId === currentUserId ? (
-              <Button variant="outlined" size="small">프로필 편집</Button>
+              <Button variant="outlined" size="small"
+              onClick={() => navigate(`/profileEdit/${currentUserId}`)}>프로필 편집</Button>
             ) : (
               <>
                 <Button 
