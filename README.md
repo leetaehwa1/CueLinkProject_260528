@@ -10,8 +10,7 @@
 ![Oracle DB](https://img.shields.io/badge/Oracle-Database-F80000?logo=oracle)
 ![Socket.io](https://img.shields.io/badge/Socket.io-4.8.1-010101?logo=socket.io)
 
-<img width="1011" height="914" alt="image" src="https://github.com/user-attachments/assets/5c3671e3-a321-4582-8e97-e172a28fbdb5" />
-
+https://github.com/user-attachments/assets/cc925047-1e90-4e95-8942-36fd6507e407
 
 ---
 
