@@ -201,7 +201,7 @@ CueLinkProject/
 
 ---
 
-## 📚 상세 문서
+## 📚 상세 문서 & 시연 영상 & 발표 자료
 
 - [CueLinkProject Docs](https://docs.google.com/document/d/1TmgM4B9T7QA5KvR6MhtyxrbIz7alJ51B90M1IFc4m7o/edit?usp=sharing)
 - [CueLinkProject Test Video](https://drive.google.com/file/d/1HbnnGA0OF3syPCbPeOBn27DuJU8liXwP/view?usp=sharing)
